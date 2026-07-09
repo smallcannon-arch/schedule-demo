@@ -507,12 +507,15 @@ function trySolve(tasks){
       }
       if(!done)unplaced.push(tk);
     }else{
-      let left=tk.h;const usedDay=new Set();
-      for(const d of days){
-        if(left===0)break;
-        if(usedDay.has(d))continue;
-        for(const p of [...PS].sort(()=>Math.random()-.5)){
-          if(ok(tk,d,p)&&roomFree(tk.room,d,p,1)){put(tk,d,p,true);usedDay.add(d);left--;break}
+      let left=tk.h;
+      const perDay=tk.h>5?2:1, dayCnt={};
+      for(let round=0;round<perDay&&left>0;round++){
+        for(const d of days){
+          if(left===0)break;
+          if((dayCnt[d]||0)>round)continue;  // 先每日1節鋪滿，再第二輪補到每日上限
+          for(const p of [...PS].sort(()=>Math.random()-.5)){
+            if(ok(tk,d,p)&&roomFree(tk.room,d,p,1)){put(tk,d,p,true);dayCnt[d]=(dayCnt[d]||0)+1;left--;break}
+          }
         }
       }
       if(left>0)unplaced.push(tk);
@@ -773,14 +776,16 @@ function parseWorkbook(buf){
   if(!nd.classes.length)throw new Error('班級基本資料無有效班級');
   // 科目
   nd.subjects={};
-  for(const r of S('設定_科目表').slice(1)){
-    if(!r||!r[0]||!r[1])continue;
-    nd.subjects[String(r[1])]={
+  const srows=S('設定_科目表').slice(1).filter(r=>r&&r[0]&&r[1]);
+  const hasMode=srows.some(r=>r[19]);  // 舊版母版無「排課方式」欄→依授課身份推定
+  for(const r of srows){
+    const nm=String(r[1]);
+    nd.subjects[nm]={
       hours:[5,6,7,8,9,10].map(c=>+(r[c]||0)),
       room:String(r[12]||'R00'),
       banned:String(r[16]||'').split(/[,，]/).map(x=>+x).filter(x=>x>0),
       block:String(r[15]||''),
-      self:String(r[19]||'')==='導師自排',
+      self:hasMode?String(r[19]||'')==='導師自排':(String(r[11]||'')==='導師'&&nm!=='本土語文'),
       pairMode:String(r[18]||'')};
   }
   // 教師
