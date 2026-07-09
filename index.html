@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>智慧排課系統 DEMO｜示範資料（已匿名化）</title>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
 :root{
   --ink:#4a4458; --muted:#8d829e; --line:#efe8ea; --bg:#fdf8f4;
@@ -124,6 +125,18 @@ h1{font-size:27px;font-weight:900;margin-bottom:4px}
 <section class="view on" id="v-set">
   <h1>⚙️ 基本設定</h1>
   <div class="sub">此 DEMO 內建一所 16 班國小的完整示範資料（教師姓名已匿名化），可直接體驗：配課 → 規則 → 排課 → 課表 → 導師自排。</div>
+  <div class="panel">
+    <h2>📂 學校資料</h2>
+    <div class="sub" style="margin-bottom:10px">目前：<b id="dataSrc" style="color:var(--pink-d)">內建示範資料（匿名）</b>。
+    匯入貴校「通用母版」Excel 即可用真實資料排課——<b>資料只存在這台電腦的瀏覽器，不會上傳任何伺服器</b>。</div>
+    <div style="display:flex;gap:9px;flex-wrap:wrap">
+      <label class="btn pink sm" style="cursor:pointer">📥 匯入學校資料（母版 Excel）<input type="file" accept=".xlsx" hidden onchange="importXlsx(this)"></label>
+      <button class="btn mint sm" onclick="exportJSON()">💾 匯出 JSON 備份</button>
+      <label class="btn soft sm" style="cursor:pointer">📤 匯入 JSON 備份<input type="file" accept=".json" hidden onchange="importJSON(this)"></label>
+      <button class="btn soft sm" onclick="resetDemo()">↺ 還原示範資料</button>
+    </div>
+    <div class="sub" style="margin-top:10px;margin-bottom:0" id="lsMsg"></div>
+  </div>
   <div class="panel">
     <h2>🏷️ 班級顯示格式</h2>
     <div class="fmtopts" id="fmtopts">
@@ -283,13 +296,13 @@ function setFmt(f){
 document.querySelectorAll('#fmtopts .fo').forEach(e=>e.onclick=()=>setFmt(e.dataset.f));
 
 /* ═══ 資料整理 ═══ */
-const CODE2C={}; DATA.classes.forEach(c=>CODE2C[c.code]=c);
+let CODE2C={};
 const CAT={'國語文':'k-lang','英語文':'k-lang','本土語文':'k-lang','數學':'k-math','數學遊藝':'k-math','自然科學':'k-nat','社會':'k-soc','音樂':'k-art','視覺藝術':'k-art','音閱百寶箱':'k-art','健康':'k-pe','體育':'k-pe','生活課程':'k-life','綜合活動':'k-life'};
 function cat(s){return CAT[s]||'k-flex'}
-const BLK=new Set(DATA.blocked.map(x=>x.join('|')));
+let BLK=new Set();
 
 /* ═══ 不排課時間（可增刪修）═══ */
-let LIMITS=DATA.limits.map(r=>[...r]);   // [對象,星期,節次,類型,原因]
+let LIMITS=[];   // [對象,星期,節次,類型,原因]
 let TLIM=new Set(),GLIM=new Set(),CLIM=new Set();
 const CNNUM={'一':1,'二':2,'三':3,'四':4,'五':5,'六':6};
 function rebuildLim(){
@@ -351,7 +364,7 @@ function toggleG(g,d,p){
 }
 
 /* ═══ 排課規則（可增刪修）═══ */
-let RULES=DATA.rules.map(r=>[...r]);   // [id,硬軟,類別,內容,參數,啟用]
+let RULES=[];   // [id,硬軟,類別,內容,參數,啟用]
 function ruleOn(id){const r=RULES.find(x=>x[0]===id);return !r||r[5]==='是'}
 function ruleW(id){const r=RULES.find(x=>x[0]===id);if(!r||r[5]!=='是')return 0;const m=/penalty=(\d+)/.exec(r[4]);return m?+m[1]:0}
 function renderRules(){
@@ -395,12 +408,13 @@ function poolOf(code){
   }
   return out;
 }
-document.getElementById('statLine').innerHTML=
-  `班級 <b>${DATA.classes.length}</b> 班｜教師 <b>${Object.keys(DATA.roster).length}</b> 人｜科目 <b>${Object.keys(DATA.subjects).length}</b> 科｜本土語鎖定 <b>${DATA.locks.length}</b> 筆｜不排課時間 <b>${DATA.limits.length}</b> 筆｜場地封鎖 <b>${DATA.blocked.length}</b> 筆｜規則 <b>${DATA.rules.length}</b> 條`;
+function renderStat(){
+  document.getElementById('statLine').innerHTML=
+  `班級 <b>${DATA.classes.length}</b> 班｜教師 <b>${Object.keys(DATA.roster).length}</b> 人｜科目 <b>${Object.keys(DATA.subjects).length}</b> 科｜本土語鎖定 <b>${DATA.locks.length}</b> 筆｜不排課時間 <b>${LIMITS.length}</b> 筆｜場地封鎖 <b>${DATA.blocked.length}</b> 筆｜規則 <b>${RULES.length}</b> 條`;
+}
 
 /* ═══ 配課檢視 ═══ */
-const ENG_SUBJ=Object.keys(DATA.subjects).filter(s=>!DATA.subjects[s].self&&s!=='本土語文');
-const TEACHERS=['',...Object.keys(DATA.roster)];
+let ENG_SUBJ=[],TEACHERS=[];
 function renderAlloc(){
   const t=document.getElementById('allocTable');
   let h='<tr><th>班級</th><th>本土語文</th>'+ENG_SUBJ.map(s=>`<th>${s}</th>`).join('')+'</tr>';
@@ -531,7 +545,7 @@ function doSolve(){
     document.getElementById('rWarns').innerHTML=best.unplaced.length?
       '<ul class="warnlist">'+best.unplaced.map(tk=>`<li>⚠ ${clsName(CODE2C[tk.code])} ${tk.s} 未能排入（示範演算法限制，正式版 CP-SAT 可解）</li>`).join('')+'</ul>':'';
     btn.disabled=false;btn.textContent='⚡ 重新排課';
-    fillTT();fillTutor();
+    fillTT();fillTutor();saveLS();
   },60);
 }
 
@@ -641,9 +655,9 @@ function putP(code,d,p){
   tutorPlaced[code]=tutorPlaced[code]||{};
   tutorPlaced[code][`${d}|${p}`]=pickSubj;
   if(left[1]===1)pickSubj=null;
-  renderTutor();
+  renderTutor();saveLS();
 }
-function rmP(code,d,p){delete tutorPlaced[code][`${d}|${p}`];renderTutor()}
+function rmP(code,d,p){delete tutorPlaced[code][`${d}|${p}`];renderTutor();saveLS()}
 function clearTutor(){
   const code=document.getElementById('tutorSel').value;
   tutorPlaced[code]={};renderTutor();
@@ -651,11 +665,200 @@ function clearTutor(){
 
 // 教師姓名 datalist（不排課時間對象欄用）
 const dl=document.createElement('datalist');dl.id='tlist';
-dl.innerHTML=[...Object.keys(DATA.roster),'1年級','2年級','3年級','4年級','5年級','6年級'].map(x=>`<option>${x}</option>`).join('');
 document.body.appendChild(dl);
 
-function renderAll(){renderAlloc();fillTT();fillTutor();renderLim();renderRules();renderGGrid()}
-rebuildLim();setFmt('num');
+function renderAll(){renderStat();renderAlloc();fillTT();fillTutor();renderLim();renderRules();renderGGrid()}
+
+/* ═══ 資料來源切換（示範 / 匯入真實資料 / 瀏覽器存檔）═══ */
+const LSKEY='schedule_system_data_v1';
+const DEMO0=JSON.parse(JSON.stringify(DATA));  // 內建示範資料快照
+function initDerived(){
+  CODE2C={};DATA.classes.forEach(c=>CODE2C[c.code]=c);
+  BLK=new Set(DATA.blocked.map(x=>x.join('|')));
+  LIMITS=DATA.limits.map(r=>[...r]);
+  RULES=DATA.rules.map(r=>[...r]);
+  ENG_SUBJ=Object.keys(DATA.subjects).filter(s=>!DATA.subjects[s].self&&s!=='本土語文');
+  TEACHERS=['',...Object.keys(DATA.roster)];
+  SOL=null;tutorPlaced={};pickSubj=null;
+  dl.innerHTML=[...Object.keys(DATA.roster),'1年級','2年級','3年級','4年級','5年級','6年級'].map(x=>`<option>${x}</option>`).join('');
+  rebuildLim();
+}
+function applyData(nd,srcLabel){
+  for(const k of Object.keys(DATA))delete DATA[k];
+  Object.assign(DATA,nd);
+  initDerived();
+  document.getElementById('dataSrc').textContent=srcLabel;
+  renderAll();
+}
+function saveLS(label){
+  try{
+    label=label||document.getElementById('dataSrc').textContent;
+    localStorage.setItem(LSKEY,JSON.stringify({d:DATA,limits:LIMITS,rules:RULES,sol:SOL,tp:tutorPlaced,label,t:Date.now()}));
+    document.getElementById('lsMsg').innerHTML=`💾 已自動保存於此瀏覽器（${new Date().toLocaleString('zh-TW')}）— 清除瀏覽資料會遺失，請定期匯出 JSON 備份`;
+  }catch(e){document.getElementById('lsMsg').textContent='⚠ 瀏覽器儲存失敗：'+e.message}
+}
+function loadLS(){
+  try{
+    const s=localStorage.getItem(LSKEY);
+    if(!s)return false;
+    const o=JSON.parse(s);
+    applyData(o.d,o.label||'已匯入資料（瀏覽器存檔）');
+    LIMITS=o.limits||LIMITS;RULES=o.rules||RULES;
+    SOL=o.sol||null;tutorPlaced=o.tp||{};
+    rebuildLim();renderAll();
+    document.getElementById('lsMsg').innerHTML=`💾 已載入瀏覽器存檔（${new Date(o.t).toLocaleString('zh-TW')}）`;
+    return true;
+  }catch(e){return false}
+}
+function resetDemo(){
+  if(!confirm('確定還原為內建示範資料？已匯入的學校資料將自瀏覽器移除（建議先匯出 JSON 備份）。'))return;
+  localStorage.removeItem(LSKEY);
+  applyData(JSON.parse(JSON.stringify(DEMO0)),'內建示範資料（匿名）');
+  document.getElementById('lsMsg').textContent='';
+}
+function exportJSON(){
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([JSON.stringify({d:DATA,limits:LIMITS,rules:RULES,t:Date.now()},null,1)],{type:'application/json'}));
+  a.download='排課系統資料備份_'+new Date().toISOString().slice(0,10)+'.json';a.click();
+}
+function importJSON(inp){
+  const f=inp.files[0];if(!f)return;
+  const rd=new FileReader();
+  rd.onload=()=>{
+    try{
+      const o=JSON.parse(rd.result);
+      applyData(o.d,'已匯入資料（JSON 備份）');
+      LIMITS=o.limits||LIMITS;RULES=o.rules||RULES;rebuildLim();renderAll();
+      saveLS('已匯入資料（JSON 備份）');
+    }catch(e){alert('JSON 解析失敗：'+e.message)}
+  };
+  rd.readAsText(f);inp.value='';
+}
+
+/* ═══ 匯入母版 Excel（SheetJS，於瀏覽器本機解析）═══ */
+function importXlsx(inp){
+  const f=inp.files[0];if(!f)return;
+  const rd=new FileReader();
+  rd.onload=()=>{
+    try{
+      const nd=parseWorkbook(new Uint8Array(rd.result));
+      const label=(nd._school?nd._school+'（':'')+'已匯入 Excel'+(nd._school?'）':'');
+      applyData(nd,label);
+      saveLS(label);
+      alert(`匯入成功：${nd.classes.length} 班、${Object.keys(nd.roster).length} 位教師、${Object.keys(nd.subjects).length} 科。\n資料已保存於此瀏覽器。`);
+    }catch(e){alert('匯入失敗：'+e.message+'\n請確認檔案為「通用母版」格式且已在 Excel 開啟存檔過（公式需有計算值）。')}
+  };
+  rd.readAsArrayBuffer(f);inp.value='';
+}
+function parseWorkbook(buf){
+  const wb=XLSX.read(buf,{type:'array'});
+  const S=n=>{
+    const ws=wb.Sheets[n];
+    if(!ws)throw new Error('缺少分頁「'+n+'」');
+    return XLSX.utils.sheet_to_json(ws,{header:1,defval:null});
+  };
+  const opt=n=>wb.Sheets[n]?XLSX.utils.sheet_to_json(wb.Sheets[n],{header:1,defval:null}):[];
+  const nd={};
+  // 學校基本資料（選填）
+  const sch=opt('學校基本資料');
+  nd._school=sch.length>0&&sch[0]&&sch[0][1]?String(sch[0][1]):'';
+  // 班級
+  nd.classes=[];const cnt={};
+  for(const r of S('班級基本資料').slice(1)){
+    if(!r||!r[0])continue;
+    const g=+r[1];if(!g)continue;
+    cnt[g]=(cnt[g]||0)+1;
+    nd.classes.push({g,i:cnt[g],code:String(r[0]),tutor:String(r[2]||'')});
+  }
+  if(!nd.classes.length)throw new Error('班級基本資料無有效班級');
+  // 科目
+  nd.subjects={};
+  for(const r of S('設定_科目表').slice(1)){
+    if(!r||!r[0]||!r[1])continue;
+    nd.subjects[String(r[1])]={
+      hours:[5,6,7,8,9,10].map(c=>+(r[c]||0)),
+      room:String(r[12]||'R00'),
+      banned:String(r[16]||'').split(/[,，]/).map(x=>+x).filter(x=>x>0),
+      block:String(r[15]||''),
+      self:String(r[19]||'')==='導師自排',
+      pairMode:String(r[18]||'')};
+  }
+  // 教師
+  nd.roster={};
+  for(const r of S('教師名冊').slice(1))
+    if(r&&r[0])nd.roster[String(r[0])]=String(r[1]||'');
+  // 年段時段
+  nd.gslot={};
+  for(const r of S('設定_年段時段').slice(1)){
+    if(!r||!r[0])continue;
+    const g=+r[0];if(!g||g>6)continue;
+    nd.gslot[g]=[0,1,2,3,4].map(d=>[0,1,2,3,4,5,6].map(p=>r[1+d*7+p]?1:0));
+  }
+  for(let g=1;g<=6;g++)if(!nd.gslot[g])nd.gslot[g]=nd.gslot[Math.max(...Object.keys(nd.gslot))]||[[1,1,1,1,1,1,1]];
+  // 場地
+  nd.rooms={};const rname={},rprio={};
+  for(const r of S('設定_場地表').slice(1)){
+    if(!r||!r[0])continue;
+    nd.rooms[String(r[0])]=+(r[2]||1);
+    rname[String(r[0])]=String(r[1]||'');
+    if(r[4])rprio[String(r[0])]=+r[4];
+  }
+  // 配課
+  nd.assign={};
+  const al=S('配課表');
+  const heads=[];for(let c=3;c<40;c++){if(!al[0]||!al[0][c])break;heads.push(String(al[0][c]))}
+  for(const r of al.slice(1)){
+    if(!r||!r[0])continue;
+    const code=String(r[0]);
+    heads.forEach((s,i)=>{if(r[3+i])((nd.assign[code]=nd.assign[code]||{})[s]=String(r[3+i]))});
+  }
+  // 場地例外
+  nd.override={};
+  for(const r of opt('場地例外(room_override)').slice(1))
+    if(r&&r[0]&&r[1]&&r[2])((nd.override[String(r[0])]=nd.override[String(r[0])]||{})[String(r[1])]=String(r[2]));
+  // 固定課鎖定
+  nd.locks=[];
+  for(const r of opt('固定課鎖定').slice(1))
+    if(r&&r[0]&&r[1]&&r[2]&&r[3]&&String(r[6]||'')==='鎖定')
+      nd.locks.push({c:String(r[0]),d:String(r[1]),p:+r[2],s:String(r[3])});
+  // 不排課時間（原始列）
+  nd.limits=[];
+  for(const r of opt('教師時段限制').slice(1))
+    if(r&&r[0]&&r[3])nd.limits.push([String(r[0]),String(r[1]||'一'),String(r[2]||'1'),String(r[3]),String(r[4]||'')]);
+  // 場地封鎖（手動列）
+  const blocked=new Set();
+  for(const r of opt('場地封鎖').slice(1))
+    if(r&&r[0]&&r[2]&&r[3])blocked.add(String(r[0])+'|'+String(r[2])+'|'+(+r[3]));
+  // 本土語分組 → 自動推導封鎖與協同（同正式引擎）
+  nd.derived=[];
+  const g2c={};nd.classes.forEach(c=>g2c[c.code]=c.g);
+  const band={};
+  for(const lk of nd.locks)if(lk.s==='本土語文'&&g2c[lk.c])band[g2c[lk.c]]=[lk.d,lk.p];
+  const live=Object.keys(rname).find(k=>/電腦|資訊/.test(rname[k]));
+  const pool=Object.keys(rprio).sort((a,b)=>rprio[a]-rprio[b]);
+  for(const r of opt('本土語分組').slice(1)){
+    if(!r||!r[0]||!r[3])continue;
+    if(String(r[2])==='早自習')continue;
+    const g=+r[0];if(!band[g])continue;
+    const [d,p]=band[g];
+    let room=r[6]?String(r[6]):null;
+    if(/直播/.test(String(r[3])))room=room||live;
+    if(!room)room=pool.find(k=>!blocked.has(k+'|'+d+'|'+p))||null;
+    if(room&&room!=='R00')blocked.add(room+'|'+d+'|'+p);
+    if(r[8])nd.derived.push([String(r[8]),d,p]);
+  }
+  nd.blocked=[...blocked].map(x=>{const[a,b,c]=x.split('|');return[a,b,+c]});
+  // 規則
+  nd.rules=[];
+  for(const r of opt('設定_排課規則清單').slice(1))
+    if(r&&r[0])nd.rules.push([0,1,2,3,4,5].map(c=>String(r[c]==null?'':r[c])));
+  if(!nd.rules.length)nd.rules=DEMO0.rules;
+  return nd;
+}
+
+initDerived();
+if(!loadLS())document.getElementById('dataSrc').textContent='內建示範資料（匿名）';
+setFmt('num');
 </script>
 </body>
 </html>
