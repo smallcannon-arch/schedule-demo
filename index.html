@@ -164,9 +164,19 @@ h1{font-size:27px;font-weight:900;margin-bottom:4px}
 
 <!-- ═══ 配課檢視 ═══ -->
 <section class="view" id="v-alloc">
-  <h1>👩‍🏫 配課檢視（引擎排課科目）</h1>
-  <div class="sub">可直接改配課再重新排課；<b style="color:var(--pink-d)">粉紅底＝未配</b>；灰格＝該年級無此科。導師自排科目（國數等）不在此表，見「導師自排」。</div>
-  <div class="panel tbl"><table id="allocTable"></table></div>
+  <h1>👩‍🏫 配課檢視</h1>
+  <div class="csvbar" style="background:var(--sky);margin-bottom:12px"><b style="color:var(--sky-d)">📌 大校流程：</b>
+  母版 Excel 先「粗配」（任教班級填「全部」「3年級全部」即可）→ 上傳後在下表補細節：
+  <b style="color:var(--pink-d)">粉紅格＝未配</b>，直接下拉選老師；右側教師節數即時顯示<b style="color:var(--pink-d)">超鐘點</b>／缺節。
+  導師課（自動帶入導師）不在此表，減課/超鐘點改他師者除外。</div>
+  <div class="alloc-wrap">
+    <div class="panel tbl" style="margin:0"><table id="allocTable"></table></div>
+    <div class="panel" style="margin:0">
+      <h2>⏱️ 教師節數檢核</h2>
+      <div class="sub" style="margin-bottom:8px;font-size:12.5px">實配 vs（上限−減課）；含導師課</div>
+      <ul class="loadbox" id="tloadBox"></ul>
+    </div>
+  </div>
 </section>
 
 <!-- ═══ 資源班 ═══ -->
@@ -354,9 +364,12 @@ function renderLim(){
       <td><button class="btn soft sm" onclick="LIMITS.splice(${i},1);renderLim();rebuildLim()">✕</button></td></tr>`;
   });
   t.innerHTML=h;
-  if(DATA.derived.length){
-    document.getElementById('derivedBox').style.display='block';
+  const db=document.getElementById('derivedBox');
+  if(DATA.derived&&DATA.derived.length){
+    db.style.display='block';
     document.getElementById('derivedList').textContent=DATA.derived.map(x=>`${x[0]} 週${x[1]}第${x[2]}節`).join('、');
+  }else{
+    db.style.display='none';  // 修正：匯入新資料後殘留舊推導清單
   }
 }
 function addLim(){LIMITS.push(['','一','1','不可排','']);renderLim()}
@@ -501,11 +514,39 @@ function renderAlloc(){
     h+='</tr>';
   }
   t.innerHTML=h;
+  renderTLoad();
 }
 function setA(code,s,v){
   DATA.assign[code]=DATA.assign[code]||{};
   DATA.assign[code][s]=v;
-  renderAlloc();
+  renderAlloc();saveLS();
+}
+/* 教師節數檢核（實配 vs 上限−減課）*/
+const ROLE_CAP={'導師':16,'科任':20,'組長':9,'主任':3,'鐘點教師':0,'其他':0,'':0};
+function renderTLoad(){
+  const box=document.getElementById('tloadBox');if(!box)return;
+  const load={};
+  for(const code in DATA.assign){
+    const c=CODE2C[code];if(!c)continue;
+    for(const s in DATA.assign[code]){
+      const t=DATA.assign[code][s];
+      if(t&&t!=='待聘(鐘點)')load[t]=(load[t]||0)+(hoursOf(s,c.g)||0);
+    }
+  }
+  const tc=DATA.tcap||{};
+  box.innerHTML=Object.entries(load).sort((a,b)=>b[1]-a[1]).map(([t,n])=>{
+    const role=DATA.roster[t]||'';
+    const cap=(tc[t]&&tc[t].cap)||ROLE_CAP[role]||0;
+    const minus=(tc[t]&&tc[t].minus)||0;
+    const quota=cap?cap-minus:0;
+    let badge;
+    if(!cap)badge=`<span class="chip" style="background:#f1ebe6;color:#94836f;padding:2px 10px">${n}節</span>`;
+    else if(n>quota)badge=`<span class="chip bad" style="padding:2px 10px">超${n-quota}節</span>`;
+    else if(n<quota)badge=`<span class="chip warn" style="padding:2px 10px">缺${quota-n}節</span>`;
+    else badge='<span class="chip ok" style="padding:2px 10px">✓</span>';
+    const pct=cap?Math.min(100,n/quota*100):50;
+    return `<li><span class="n" style="width:66px">${t}</span><span class="bar"><i class="${cap&&n>quota?'over':''}" style="width:${pct}%"></i></span><span class="t" style="width:64px">${n}${cap?'/'+quota:''}</span>${badge}</li>`;
+  }).join('')||'<li style="color:var(--muted)">尚無配課資料</li>';
 }
 
 /* ═══ 瀏覽器內排課（貪婪＋隨機重啟）═══ */
@@ -763,6 +804,8 @@ const LSKEY='schedule_system_data_v1';
 const DEMO0=JSON.parse(JSON.stringify(DATA));  // 內建示範資料快照
 function initDerived(){
   DATA.resGroups=DATA.resGroups||[];
+  DATA.tcap=DATA.tcap||{};
+  DATA.derived=DATA.derived||[];
   DATA.classes.forEach(c=>{if(c.res===undefined)c.res=false});
   OVL=[];
   CODE2C={};DATA.classes.forEach(c=>CODE2C[c.code]=c);
@@ -837,7 +880,9 @@ function importXlsx(inp){
       const label=(nd._school?nd._school+'（':'')+'已匯入 Excel'+(nd._school?'）':'');
       applyData(nd,label);
       saveLS(label);
-      alert(`匯入成功：${nd.classes.length} 班、${Object.keys(nd.roster).length} 位教師、${Object.keys(nd.subjects).length} 科。\n資料已保存於此瀏覽器。`);
+      const w=(nd._warn&&nd._warn.length)?'\n\n提醒：\n'+nd._warn.slice(0,6).join('\n'):'';
+      alert(`匯入成功：${nd.classes.length} 班、${Object.keys(nd.roster).length} 位教師、${Object.keys(nd.subjects).length} 科。\n資料已保存於此瀏覽器。${w}`);
+      go('alloc');
     }catch(e){alert('匯入失敗：'+e.message+'\n請確認檔案為「通用母版」格式且已在 Excel 開啟存檔過（公式需有計算值）。')}
   };
   rd.readAsArrayBuffer(f);inp.value='';
@@ -850,6 +895,7 @@ function parseWorkbook(buf){
     return XLSX.utils.sheet_to_json(ws,{header:1,defval:null});
   };
   const opt=n=>wb.Sheets[n]?XLSX.utils.sheet_to_json(wb.Sheets[n],{header:1,defval:null}):[];
+  if(wb.Sheets['配課']&&wb.Sheets['教師']&&wb.Sheets['班級'])return parseV5(wb,S,opt);
   const nd={};
   // 學校基本資料（選填）
   const sch=opt('學校基本資料');
@@ -958,6 +1004,110 @@ function parseWorkbook(buf){
   for(const r of opt('設定_排課規則清單').slice(1))
     if(r&&r[0])nd.rules.push([0,1,2,3,4,5].map(c=>String(r[c]==null?'':r[c])));
   if(!nd.rules.length)nd.rules=DEMO0.rules;
+  return nd;
+}
+
+/* ═══ 母版 v5 解析（極簡8分頁、教師中心配課）═══ */
+function parseV5(wb,S,opt){
+  const nd={};
+  const sch=opt('學校基本資料');
+  nd._school=sch.find(r=>r&&String(r[0]||'').includes('學校'))?.[1]||'';
+  // 班級
+  nd.classes=[];const cnt={};
+  for(const r of S('班級').slice(1)){
+    if(!r||!r[0]||!+r[1])continue;
+    const g=+r[1];cnt[g]=(cnt[g]||0)+1;
+    nd.classes.push({g,i:cnt[g],code:String(r[0]).trim(),tutor:String(r[2]||'').trim(),res:String(r[3]||'')==='是'});
+  }
+  if(!nd.classes.length)throw new Error('「班級」分頁無有效資料（灰色範例列請改成貴校班級）');
+  // 教師
+  nd.roster={};nd.tcap={};
+  for(const r of S('教師').slice(1)){
+    if(!r||!r[0])continue;
+    const nm=String(r[0]).trim();
+    nd.roster[nm]=String(r[1]||'').trim();
+    nd.tcap[nm]={cap:+r[3]||0,minus:+r[4]||0};
+  }
+  // 場地（以名稱為識別；「原班」→不佔場地）
+  nd.rooms={};const rprio={};
+  const roomKey=n=>{n=String(n||'').trim();return !n||/原班/.test(n)?'R00':n};
+  for(const r of S('場地').slice(1)){
+    if(!r||!r[0])continue;
+    const k=roomKey(r[0]);
+    if(k!=='R00')nd.rooms[k]=+(r[1]||1);
+    if(r[2]&&k!=='R00')rprio[k]=+r[2];
+  }
+  // 科目
+  nd.subjects={};
+  for(const r of S('科目節數').slice(1)){
+    if(!r||!r[0])continue;
+    const rule=String(r[9]||'');
+    nd.subjects[String(r[0]).trim()]={
+      hours:[1,2,3,4,5,6].map(c=>+(r[c]||0)),
+      room:roomKey(r[7]),
+      banned:/不排第4/.test(rule)?[4,5]:[],
+      block:rule==='2+1分兩天'?'2+1':(rule==='兩節連堂'?'2連堂':''),
+      self:String(r[8]||'')==='是',
+      pairMode:''};
+  }
+  // 年段時段
+  nd.gslot={};
+  for(const r of S('年段時段').slice(1)){
+    if(!r||!+r[0])continue;
+    const g=+r[0];if(g>6)continue;
+    nd.gslot[g]=[0,1,2,3,4].map(d=>[0,1,2,3,4,5,6].map(p=>r[1+d*7+p]?1:0));
+  }
+  for(let g=1;g<=6;g++)if(!nd.gslot[g])nd.gslot[g]=[[1,1,1,1,0,0,0],[1,1,1,1,1,1,1],[1,1,1,1,0,0,0],[1,1,1,1,0,0,0],[1,1,1,1,0,0,0]];
+  // 本土語分組 → 鎖定＋場地封鎖＋協同
+  nd.locks=[];nd.derived=[];
+  const blocked=new Set();const bandDone=new Set();
+  for(const r of opt('本土語分組').slice(1)){
+    if(!r||!+r[0]||!r[1]||!r[2])continue;
+    const g=+r[0],d=String(r[1]).trim(),p=+r[2];
+    if(!bandDone.has(g)){
+      bandDone.add(g);
+      nd.classes.filter(c=>c.g===g).forEach(c=>nd.locks.push({c:c.code,d,p,s:'本土語文'}));
+    }
+    const rk=roomKey(r[5]);
+    if(rk!=='R00')blocked.add(rk+'|'+d+'|'+p);
+    if(r[6])nd.derived.push([String(r[6]).trim(),d,p]);
+  }
+  nd.blocked=[...blocked].map(x=>{const[a,b,c]=x.split('|');return[a,b,+c]});
+  // 配課：導師課自動帶入 → 配課列展開覆蓋（含減課/超鐘點之導師課異動）
+  nd.assign={};
+  const gOf={};nd.classes.forEach(c=>gOf[c.code]=c);
+  for(const c of nd.classes){
+    for(const s in nd.subjects){
+      if(nd.subjects[s].self&&nd.subjects[s].hours[c.g-1]>0&&c.tutor)
+        ((nd.assign[c.code]=nd.assign[c.code]||{})[s]=c.tutor);
+    }
+  }
+  const CN5={'一':1,'二':2,'三':3,'四':4,'五':5,'六':6};
+  const expand=(spec,subj)=>{
+    const out=[];
+    for(let tk of String(spec||'').split(/[、,，;；\s]+/)){
+      tk=tk.trim();if(!tk)continue;
+      if(tk==='全部'||tk==='全校'){
+        out.push(...nd.classes.filter(c=>nd.subjects[subj]&&nd.subjects[subj].hours[c.g-1]>0).map(c=>c.code));
+      }else if(/年級全部$/.test(tk)||/^[1-6一二三四五六]年級$/.test(tk)){
+        const g=CN5[tk[0]]||+tk[0];
+        out.push(...nd.classes.filter(c=>c.g===g).map(c=>c.code));
+      }else if(gOf[tk])out.push(tk);
+      else nd._warn.push(`配課「${subj}」的班級「${tk}」找不到，已略過`);
+    }
+    return out;
+  };
+  nd._warn=[];
+  for(const r of S('配課').slice(1)){
+    if(!r||!r[0]||!r[1])continue;
+    const t=String(r[0]).trim(),subj=String(r[1]).trim();
+    if(!nd.subjects[subj]){nd._warn.push(`配課科目「${subj}」不在科目節數表，該列略過`);continue}
+    for(const code of expand(r[2],subj))
+      ((nd.assign[code]=nd.assign[code]||{})[subj]=t);
+  }
+  nd.override={};nd.limits=[];nd.resGroups=[];
+  nd.classes.forEach(c=>{if(c.res){/* 保留旗標，抽離組於系統資源班頁設定 */}});
+  nd.rules=JSON.parse(JSON.stringify(DEMO0.rules));
   return nd;
 }
 
