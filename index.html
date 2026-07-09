@@ -1020,13 +1020,19 @@ function parseV5(wb,S,opt){
     nd.classes.push({g,i:cnt[g],code:String(r[0]).trim(),tutor:String(r[2]||'').trim(),res:String(r[3]||'')==='是'});
   }
   if(!nd.classes.length)throw new Error('「班級」分頁無有效資料（灰色範例列請改成貴校班級）');
-  // 教師
+  // 教師：導師自動由班級分頁帶入；教師分頁填科任/行政/特例導師（同名覆蓋）
   nd.roster={};nd.tcap={};
-  for(const r of S('教師').slice(1)){
+  for(const c of nd.classes){
+    if(c.tutor){nd.roster[c.tutor]='導師';nd.tcap[c.tutor]={cap:0,minus:0}}
+  }
+  const trows=S('教師');
+  const th=(trows[0]||[]).map(x=>String(x||''));
+  const iCap=th.findIndex(x=>x.includes('上限')), iMinus=th.findIndex(x=>x.includes('減課'));
+  for(const r of trows.slice(1)){
     if(!r||!r[0])continue;
     const nm=String(r[0]).trim();
-    nd.roster[nm]=String(r[1]||'').trim();
-    nd.tcap[nm]={cap:+r[3]||0,minus:+r[4]||0};
+    nd.roster[nm]=String(r[1]||nd.roster[nm]||'').trim();
+    nd.tcap[nm]={cap:iCap>0?(+r[iCap]||0):0, minus:iMinus>0?(+r[iMinus]||0):0};
   }
   // 場地（以名稱為識別；「原班」→不佔場地）
   nd.rooms={};const rprio={};
