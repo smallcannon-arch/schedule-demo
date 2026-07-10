@@ -1,3 +1,20 @@
-# 國小智慧排課系統 DEMO
+# 國小智慧排課系統公開廣測版
 
-示範資料已匿名化。線上 DEMO：https://smallcannon-arch.github.io/schedule-demo/
+線上網址：https://smallcannon-arch.github.io/schedule-demo/
+
+## 本次廣測範圍
+
+- Excel 母版匯入與匿名示範資料
+- 瀏覽器排課與硬規則檢核
+- 班級／配課／教師三欄同步編修
+- 即時衝突原因、復原、重做與變更摘要
+- 資源班綁課唯讀保護
+- 單班教師調整檔匯出與回傳檢核
+
+## 暫未開放
+
+- 公開 Cloud Run CP-SAT API
+- OpenAI 選配功能
+- 教師帳號與跨裝置即時同步
+
+示範教師資料已匿名化；匯入的學校資料保存在使用者自己的瀏覽器，七天後自動到期。
