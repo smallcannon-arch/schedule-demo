@@ -123,6 +123,7 @@ h1{font-size:27px;font-weight:900;margin-bottom:4px}
 .editor-message.bad{border-color:var(--pink-d);background:#fff4f7}.editor-message.ok{border-color:var(--mint-d);background:#f1fbf7}
 .teacher-handoff{border-left:5px solid var(--sky-d)}
 .teacher-actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.teacher-code{width:190px;font:inherit;padding:8px 10px;border:2px solid var(--line);border-radius:8px;background:#fff}
 .teacher-only{display:none}
 .les.resource-lock{outline:2px solid var(--sky-d);background:#e7f1f7;color:#315f7d}
 .les.resource-lock small{font-weight:900;opacity:1}
@@ -209,6 +210,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-v
   <div class="panel teacher-handoff">
     <h2>教師調整入口</h2>
     <div class="teacher-actions">
+      <input class="teacher-code" id="teacherEntryCode" type="password" autocomplete="off" minlength="8" maxlength="64" placeholder="班級調整碼（至少 8 碼）" aria-label="班級調整碼">
       <label class="btn mint sm" style="cursor:pointer">開啟教師調整檔<input type="file" accept=".json" hidden onchange="importTeacherPackage(this)"></label>
       <span class="sub" style="margin:0">老師請使用管理者提供的單班調整檔。</span>
     </div>
@@ -391,6 +393,9 @@ button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-v
   <div class="sub">先點下方科目膠囊，再點課表上的 <b>□</b> 放入；點已排的科目可移除。系統會即時阻擋教師、班級、場地與時段衝突。</div>
   <div class="panel teacher-handoff">
     <div class="teacher-actions teacher-admin-only">
+      <input class="teacher-code" id="teacherAdminCode" type="password" autocomplete="off" minlength="8" maxlength="64" placeholder="班級調整碼（至少 8 碼）" aria-label="班級調整碼">
+      <button class="btn soft sm" type="button" onclick="generateTeacherCode()">產生調整碼</button>
+      <button class="btn soft sm" id="teacherCodeToggle" type="button" onclick="toggleTeacherCode()">顯示</button>
       <button class="btn mint sm" type="button" onclick="exportTeacherPackage()">匯出本班教師調整檔</button>
       <label class="btn soft sm" style="cursor:pointer">匯入老師回傳結果<input type="file" accept=".json" hidden onchange="importTeacherResult(this)"></label>
       <label class="btn soft sm" style="cursor:pointer">開啟教師調整檔<input type="file" accept=".json" hidden onchange="importTeacherPackage(this)"></label>
@@ -1247,6 +1252,19 @@ function downloadJSONFile(filename,payload){
 }
 function safeFilePart(value){return String(value||'class').replace(/[^\w\u4e00-\u9fff-]+/g,'_')}
 function newPackageId(){return crypto.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random().toString(16).slice(2)}`}
+function teacherCodeFromInput(input){
+  const field=input&&input.closest('.teacher-actions')?.querySelector('.teacher-code');
+  return String((field&&field.value)||'').trim();
+}
+function generateTeacherCode(){
+  const field=document.getElementById('teacherAdminCode');field.value=TeacherWorkflow.randomAccessCode();field.type='text';
+  document.getElementById('teacherCodeToggle').textContent='隱藏';field.focus();field.select();
+  setHandoffMessage('已產生班級調整碼。請將檔案與調整碼分開傳給老師，且不要把調整碼貼在公開群組。');
+}
+function toggleTeacherCode(){
+  const field=document.getElementById('teacherAdminCode'),button=document.getElementById('teacherCodeToggle');
+  field.type=field.type==='password'?'text':'password';button.textContent=field.type==='password'?'顯示':'隱藏';
+}
 function setHandoffMessage(message){const el=document.getElementById('teacherHandoffMsg');if(el)el.textContent=message}
 function currentSnapshot(){
   return {data:TeacherWorkflow.clone(DATA),limits:TeacherWorkflow.clone(LIMITS),rules:TeacherWorkflow.clone(RULES),
@@ -1288,9 +1306,11 @@ function buildTeacherData(code,busySlots){
     gslot:TeacherWorkflow.clone(DATA.gslot),rooms:TeacherWorkflow.clone(DATA.rooms),roster,
     resGroups:(DATA.resGroups||[]).filter(item=>item.code===code).map(item=>TeacherWorkflow.clone(item)),tcap};
 }
-function exportTeacherPackage(){
+async function exportTeacherPackage(){
   if(TEACHER_MODE)return;
   const code=document.getElementById('tutorSel').value,c=CODE2C[code];
+  const accessCode=String(document.getElementById('teacherAdminCode').value||'').trim();
+  if(accessCode.length<8)return alert('請先輸入或產生至少 8 個字元的班級調整碼。');
   if(!SOL||!c)return alert('請先執行固定課排程，再匯出教師調整檔。');
   if(!poolOf(code).length)return alert('此班沒有開放導師自行調整的科目。');
   const hard=validateSchedule().hard;if(hard.length)return alert(`目前有 ${hard.length} 項硬規則問題，請先修正再匯出。`);
@@ -1302,18 +1322,22 @@ function exportTeacherPackage(){
   const payload={schema:'schedule-teacher-package-v1',package_id:packageId,created_at:new Date().toISOString(),
     class_code:code,teacher:c.tutor,base_signature:baseSignature,package_signature:packageSignature,
     data,fixed,overlay,placements:TeacherWorkflow.clone(tutorPlaced[code]||{})};
-  TEACHER_PACKAGES[packageId]={code,teacher:c.tutor,baseSignature,packageSignature,createdAt:payload.created_at};
-  saveLS();
-  downloadJSONFile(`教師調整檔_${safeFilePart(code)}_${safeFilePart(c.tutor)}.json`,payload);
-  setHandoffMessage(`${clsName(c)}教師調整檔已匯出。回傳結果只會在通過目前全校課表檢核後套用。`);
+  try{
+    const encrypted=await TeacherWorkflow.encryptPackage(payload,accessCode);
+    TEACHER_PACKAGES[packageId]={code,teacher:c.tutor,baseSignature,packageSignature,createdAt:payload.created_at};
+    saveLS();downloadJSONFile(`教師調整檔_${safeFilePart(code)}_${safeFilePart(c.tutor)}.json`,encrypted);
+    setHandoffMessage(`${clsName(c)}加密調整檔已匯出。請將檔案與調整碼分開傳送；回傳結果仍須通過全校課表檢核。`);
+  }catch(error){alert('教師調整檔加密失敗：'+error.message)}
 }
 function importTeacherPackage(input){
   const file=input.files&&input.files[0];if(!file)return;
   if(file.size>2*1024*1024){input.value='';return alert('教師調整檔超過 2 MB，已拒絕開啟。')}
   const reader=new FileReader();
-  reader.onload=()=>{
+  reader.onload=async()=>{
     try{
-      const pkg=JSON.parse(reader.result);
+      const parsed=JSON.parse(reader.result),accessCode=teacherCodeFromInput(input);
+      const pkg=parsed.schema==='schedule-teacher-encrypted-v1'?
+        await TeacherWorkflow.decryptPackage(parsed,accessCode):parsed;
       if(pkg.schema!=='schedule-teacher-package-v1'||!pkg.data||!pkg.fixed||!pkg.class_code)
         throw new Error('檔案不是本系統的教師調整檔');
       if(!Array.isArray(pkg.data.classes)||pkg.data.classes.length!==1||pkg.data.classes[0].code!==pkg.class_code)
@@ -1322,7 +1346,7 @@ function importTeacherPackage(input){
       if(check!==pkg.package_signature)throw new Error('調整檔內容不完整或已被修改');
       ADMIN_SNAPSHOT=currentSnapshot();
       TEACHER_MODE={packageId:pkg.package_id,code:pkg.class_code,teacher:pkg.teacher,
-        baseSignature:pkg.base_signature,packageSignature:pkg.package_signature};
+        baseSignature:pkg.base_signature,packageSignature:pkg.package_signature,accessCode};
       FORMAL_AUTO_TUTOR=false;
       document.body.classList.add('teacher-mode');
       applyData(TeacherWorkflow.clone(pkg.data),`${pkg.class_code} 教師調整檔`);
@@ -1339,7 +1363,7 @@ function importTeacherPackage(input){
   reader.onerror=()=>{input.value='';alert('教師調整檔讀取失敗。')};
   reader.readAsText(file);
 }
-function exportTeacherResult(){
+async function exportTeacherResult(){
   if(!TEACHER_MODE)return;
   const code=TEACHER_MODE.code,remaining=remainPool(code).filter(([,left])=>left!==0);
   if(remaining.length)return alert('尚有科目未排完：'+remaining.map(([s,left])=>`${s} ${left}節`).join('、'));
@@ -1348,8 +1372,11 @@ function exportTeacherResult(){
     class_code:code,teacher:TEACHER_MODE.teacher,base_signature:TEACHER_MODE.baseSignature,
     package_signature:TEACHER_MODE.packageSignature,submitted_at:new Date().toISOString(),
     placements:TeacherWorkflow.clone(tutorPlaced[code]||{})};
-  downloadJSONFile(`教師調整結果_${safeFilePart(code)}_${safeFilePart(TEACHER_MODE.teacher)}.json`,payload);
-  setHandoffMessage('調整結果已匯出，請交回排課管理者匯入。');
+  try{
+    const output=TEACHER_MODE.accessCode?await TeacherWorkflow.encryptPackage(payload,TEACHER_MODE.accessCode):payload;
+    downloadJSONFile(`教師調整結果_${safeFilePart(code)}_${safeFilePart(TEACHER_MODE.teacher)}.json`,output);
+    setHandoffMessage('加密調整結果已匯出，請交回排課管理者，並使用原班級調整碼匯入。');
+  }catch(error){alert('教師調整結果加密失敗：'+error.message)}
 }
 function restoreAdminSnapshot(){
   const snapshot=ADMIN_SNAPSHOT;TEACHER_MODE=null;ADMIN_SNAPSHOT=null;document.body.classList.remove('teacher-mode');
@@ -1370,10 +1397,13 @@ function importTeacherResult(input){
   if(TEACHER_MODE){input.value='';return alert('請先離開教師調整模式，再由管理端匯入結果。')}
   if(file.size>1024*1024){input.value='';return alert('教師回傳檔超過 1 MB，已拒絕匯入。')}
   const reader=new FileReader();
-  reader.onload=()=>{
+  reader.onload=async()=>{
     let old=null,code='';
     try{
-      const result=JSON.parse(reader.result),issued=TEACHER_PACKAGES[result.package_id];
+      const parsed=JSON.parse(reader.result),accessCode=teacherCodeFromInput(input);
+      const result=parsed.schema==='schedule-teacher-encrypted-v1'?
+        await TeacherWorkflow.decryptPackage(parsed,accessCode):parsed;
+      const issued=TEACHER_PACKAGES[result.package_id];
       if(result.schema!=='schedule-teacher-result-v1'||!issued)throw new Error('找不到對應的已發行教師調整檔');
       code=result.class_code;const c=CODE2C[code];
       if(!c||issued.code!==code||issued.teacher!==result.teacher||c.tutor!==result.teacher)
